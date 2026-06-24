@@ -507,6 +507,7 @@ header h1 {
     .btn, #auth-section, #filter-panel {
         display: none;
     }
+}
 
 /* BI Dashboard Styles */
 .bi-header {
@@ -753,7 +754,6 @@ header h1 {
     .kpi-value {
         font-size: 1.5rem;
     }
-}
 }
 
 /* Made with Bob */
