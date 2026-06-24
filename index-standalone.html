@@ -4,7 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GitHub PRレビューコメントビューアー</title>
-    <link rel="stylesheet" href="css/styles.css">
+    <meta name="version" content="2.0.1">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <link rel="stylesheet" href="css/styles.css?v=2.0.1">
 </head>
 <body>
     <div class="container">
@@ -22,6 +26,7 @@
                 <small>必要なスコープ: repo（プライベートリポジトリ）または public_repo（パブリックリポジトリ）</small>
             </div>
             <button id="auth-btn" class="btn btn-primary">認証</button>
+            <button id="use-stub-data-btn" class="btn btn-secondary">📊 スタブデータでテスト</button>
             <div id="auth-status" class="status-message"></div>
         </section>
 
@@ -77,6 +82,7 @@
                 <h2>検索結果</h2>
                 <div class="results-actions">
                     <span id="comment-count" class="comment-count"></span>
+                    <button id="bi-dashboard-btn" class="btn btn-primary">📊 BIダッシュボード</button>
                     <button id="export-csv-btn" class="btn btn-success">📥 CSVダウンロード</button>
                 </div>
             </div>
@@ -90,6 +96,85 @@
             <div id="error-message" class="error-message" style="display:none;"></div>
 
             <div id="comments-container" class="comments-container"></div>
+        </section>
+
+        <!-- BI Dashboard Section -->
+        <section id="bi-dashboard-section" class="card" style="display:none;">
+            <div class="bi-header">
+                <h2>📊 BIダッシュボード</h2>
+                <button id="back-to-results-btn" class="btn btn-secondary">← 検索結果に戻る</button>
+            </div>
+
+            <!-- BI Menu -->
+            <div id="bi-menu" class="bi-menu">
+                <h3>分析メニュー</h3>
+                <div class="bi-menu-grid">
+                    <button class="bi-menu-item active" data-bi-view="category-ranking">
+                        <span class="bi-icon">📊</span>
+                        <span class="bi-title">工程別指摘件数ランキング</span>
+                        <span class="bi-desc">DEV, DESIGN, SEC, TEST, PERFの分類</span>
+                    </button>
+                    <button class="bi-menu-item disabled" data-bi-view="coming-soon-1">
+                        <span class="bi-icon">📈</span>
+                        <span class="bi-title">今後追加予定</span>
+                        <span class="bi-desc">新しい分析機能</span>
+                    </button>
+                    <button class="bi-menu-item disabled" data-bi-view="coming-soon-2">
+                        <span class="bi-icon">📉</span>
+                        <span class="bi-title">今後追加予定</span>
+                        <span class="bi-desc">新しい分析機能</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- KPI Cards -->
+            <div id="kpi-cards" class="kpi-cards">
+                <div class="kpi-card">
+                    <div class="kpi-icon">📋</div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">総PR数</div>
+                        <div class="kpi-value" id="kpi-total-prs">0</div>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-icon">💬</div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">レビューコメント数</div>
+                        <div class="kpi-value" id="kpi-total-comments">0</div>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-icon">⚠️</div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">指摘コメント数</div>
+                        <div class="kpi-value" id="kpi-issue-comments">0</div>
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-icon">📊</div>
+                    <div class="kpi-content">
+                        <div class="kpi-label">1PRあたり平均指摘数</div>
+                        <div class="kpi-value" id="kpi-avg-issues">0.0</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- BI Content Area -->
+            <div id="bi-content" class="bi-content">
+                <!-- Category Ranking View -->
+                <div id="category-ranking-view" class="bi-view active">
+                    <h3>工程別指摘件数ランキング</h3>
+                    <div id="category-chart" class="chart-container"></div>
+                </div>
+
+                <!-- Placeholder for future BI views -->
+                <div id="coming-soon-view" class="bi-view" style="display:none;">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">🚧</div>
+                        <div class="empty-state-text">この機能は今後追加予定です</div>
+                    </div>
+                </div>
+            </div>
         </section>
     </div>
 
@@ -374,16 +459,29 @@
             }
 
             static formatCommentForExport(pr, comment, commentType, reviewState = null) {
+                // Safely parse dates with validation
+                const parsePRDate = (dateString) => {
+                    if (!dateString) return new Date().toISOString();
+                    const date = new Date(dateString);
+                    return isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+                };
+
+                const parseCommentDate = (dateString) => {
+                    if (!dateString) return new Date().toISOString();
+                    const date = new Date(dateString);
+                    return isNaN(date.getTime()) ? new Date().toISOString() : date.toISOString();
+                };
+
                 return {
                     prNumber: pr.number,
                     prTitle: pr.title,
-                    prAuthor: pr.user.login,
+                    prAuthor: pr.user?.login || 'Unknown',
                     prState: pr.state,
-                    prCreatedAt: new Date(pr.created_at).toISOString(),
+                    prCreatedAt: parsePRDate(pr.created_at),
                     commentType: commentType,
-                    commentAuthor: comment.user.login,
+                    commentAuthor: comment.user?.login || 'Unknown',
                     commentBody: comment.body || '',
-                    commentCreatedAt: new Date(comment.created_at).toISOString(),
+                    commentCreatedAt: parseCommentDate(comment.created_at),
                     filePath: comment.path || '',
                     lineNumber: comment.line || comment.original_line || '',
                     reviewState: reviewState,
@@ -397,7 +495,18 @@
         // ============================================================================
         class Utils {
             static formatDate(dateString) {
+                if (!dateString) {
+                    return 'N/A';
+                }
+                
                 const date = new Date(dateString);
+                
+                // Check if date is valid
+                if (isNaN(date.getTime())) {
+                    console.warn('Invalid date string:', dateString);
+                    return 'Invalid Date';
+                }
+                
                 const options = {
                     year: 'numeric',
                     month: 'short',
@@ -471,7 +580,16 @@
                 return comments.sort((a, b) => {
                     const dateA = new Date(a.created_at || a.commentCreatedAt);
                     const dateB = new Date(b.created_at || b.commentCreatedAt);
-                    return ascending ? dateA - dateB : dateB - dateA;
+                    
+                    // Handle invalid dates
+                    const timeA = dateA.getTime();
+                    const timeB = dateB.getTime();
+                    
+                    if (isNaN(timeA) && isNaN(timeB)) return 0;
+                    if (isNaN(timeA)) return 1;
+                    if (isNaN(timeB)) return -1;
+                    
+                    return ascending ? timeA - timeB : timeB - timeA;
                 });
             }
 
@@ -543,6 +661,16 @@
                 this.commentsContainer = document.getElementById('comments-container');
                 this.commentCount = document.getElementById('comment-count');
                 this.progressText = document.getElementById('progress-text');
+
+                // BI Dashboard elements
+                this.biDashboardBtn = document.getElementById('bi-dashboard-btn');
+                this.biDashboardSection = document.getElementById('bi-dashboard-section');
+                this.backToResultsBtn = document.getElementById('back-to-results-btn');
+                this.biMenuItems = document.querySelectorAll('.bi-menu-item');
+                this.biViews = document.querySelectorAll('.bi-view');
+                
+                // Stub data button
+                this.useStubDataBtn = document.getElementById('use-stub-data-btn');
             }
 
             attachEventListeners() {
@@ -558,9 +686,24 @@
                 this.keywordCheckboxes.forEach(checkbox => {
                     checkbox.addEventListener('change', () => this.updateKeywordFilter());
                 });
-                this.customKeywordInput.addEventListener('input', 
+                this.customKeywordInput.addEventListener('input',
                     Utils.debounce(() => this.updateKeywordFilter(), 500)
                 );
+
+                // BI Dashboard event listeners
+                this.biDashboardBtn.addEventListener('click', () => this.showBIDashboard());
+                this.backToResultsBtn.addEventListener('click', () => this.showResults());
+                
+                this.biMenuItems.forEach(item => {
+                    item.addEventListener('click', (e) => {
+                        if (!item.classList.contains('disabled')) {
+                            this.switchBIView(item.dataset.biView);
+                        }
+                    });
+                });
+
+                // Stub data button
+                this.useStubDataBtn.addEventListener('click', () => this.loadStubData());
             }
 
             initializeDateRange() {
@@ -901,6 +1044,251 @@
 
             hideError() {
                 this.errorMessage.style.display = 'none';
+            }
+
+            // BI Dashboard Methods
+            showBIDashboard() {
+                this.resultsSection.style.display = 'none';
+                this.biDashboardSection.style.display = 'block';
+                this.calculateAndDisplayKPIs();
+                this.renderCategoryRanking();
+            }
+
+            showResults() {
+                this.biDashboardSection.style.display = 'none';
+                this.resultsSection.style.display = 'block';
+            }
+
+            switchBIView(viewName) {
+                // Update menu items
+                this.biMenuItems.forEach(item => {
+                    if (item.dataset.biView === viewName) {
+                        item.classList.add('active');
+                    } else {
+                        item.classList.remove('active');
+                    }
+                });
+
+                // Update views
+                this.biViews.forEach(view => {
+                    view.classList.remove('active');
+                });
+
+                if (viewName === 'category-ranking') {
+                    document.getElementById('category-ranking-view').classList.add('active');
+                    this.renderCategoryRanking();
+                } else {
+                    document.getElementById('coming-soon-view').classList.add('active');
+                }
+            }
+
+            calculateAndDisplayKPIs() {
+                // Get unique PRs
+                const uniquePRs = new Set(this.allComments.map(c => c.prNumber));
+                const totalPRs = uniquePRs.size;
+
+                // Total comments
+                const totalComments = this.allComments.length;
+
+                // Issue comments (comments with keywords or review state changes_requested)
+                const issueComments = this.allComments.filter(c =>
+                    c.matchedKeywords.length > 0 ||
+                    c.reviewState === 'CHANGES_REQUESTED'
+                ).length;
+
+                // Average issues per PR
+                const avgIssues = totalPRs > 0 ? (issueComments / totalPRs).toFixed(1) : '0.0';
+
+                // Update KPI cards
+                document.getElementById('kpi-total-prs').textContent = totalPRs;
+                document.getElementById('kpi-total-comments').textContent = totalComments;
+                document.getElementById('kpi-issue-comments').textContent = issueComments;
+                document.getElementById('kpi-avg-issues').textContent = avgIssues;
+            }
+
+            renderCategoryRanking() {
+                const categories = ['DEV', 'DESIGN', 'SEC', 'TEST', 'PERF'];
+                const categoryCounts = {};
+
+                // Count comments for each category
+                categories.forEach(category => {
+                    categoryCounts[category] = this.allComments.filter(comment =>
+                        comment.matchedKeywords.includes(category)
+                    ).length;
+                });
+
+                // Sort by count
+                const sortedCategories = categories.sort((a, b) =>
+                    categoryCounts[b] - categoryCounts[a]
+                );
+
+                // Find max count for percentage calculation
+                const maxCount = Math.max(...Object.values(categoryCounts));
+
+                // Render chart
+                const chartContainer = document.getElementById('category-chart');
+                chartContainer.innerHTML = '';
+
+                if (maxCount === 0) {
+                    chartContainer.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📊</div>
+                            <div class="empty-state-text">キーワードに一致するコメントがありません</div>
+                        </div>
+                    `;
+                    return;
+                }
+
+                sortedCategories.forEach(category => {
+                    const count = categoryCounts[category];
+                    const percentage = maxCount > 0 ? (count / maxCount) * 100 : 0;
+                    
+                    const barDiv = document.createElement('div');
+                    barDiv.className = 'chart-bar';
+                    barDiv.innerHTML = `
+                        <div class="chart-bar-label">
+                            <span>${category}</span>
+                            <span class="chart-bar-count">${count}件</span>
+                        </div>
+                        <div class="chart-bar-track">
+                            <div class="chart-bar-fill ${category.toLowerCase()}" style="width: ${percentage}%">
+                                ${percentage > 15 ? count + '件' : ''}
+                            </div>
+                        </div>
+                    `;
+                    chartContainer.appendChild(barDiv);
+                });
+            }
+
+            // Generate stub data for testing
+            generateStubData() {
+                const stubComments = [];
+                const categories = ['DEV', 'DESIGN', 'SEC', 'TEST', 'PERF'];
+                const authors = ['alice', 'bob', 'charlie', 'diana', 'eve'];
+                const prTitles = [
+                    'ログイン機能の実装',
+                    'UIデザインの改善',
+                    'セキュリティ脆弱性の修正',
+                    'ユニットテストの追加',
+                    'パフォーマンス最適化'
+                ];
+
+                // Get current date for realistic data
+                const now = new Date();
+                const currentYear = now.getFullYear();
+                const currentMonth = now.getMonth();
+                const currentDay = now.getDate();
+
+                // Generate 5 PRs with various comments
+                for (let prNum = 1; prNum <= 5; prNum++) {
+                    const prTitle = prTitles[prNum - 1];
+                    const prAuthor = authors[prNum % authors.length];
+                    
+                    // Create PR date (going back in days from today)
+                    const prDate = new Date(currentYear, currentMonth, currentDay - prNum + 1);
+                    const prCreatedAt = prDate.toISOString();
+
+                    // Generate 5-15 comments per PR
+                    const commentCount = Math.floor(Math.random() * 11) + 5;
+                    
+                    for (let i = 0; i < commentCount; i++) {
+                        // Randomly assign 0-2 keywords to each comment
+                        const keywordCount = Math.floor(Math.random() * 3);
+                        const matchedKeywords = [];
+                        
+                        for (let k = 0; k < keywordCount; k++) {
+                            const keyword = categories[Math.floor(Math.random() * categories.length)];
+                            if (!matchedKeywords.includes(keyword)) {
+                                matchedKeywords.push(keyword);
+                            }
+                        }
+
+                        const commentTypes = ['Review', 'Review Comment', 'Issue Comment'];
+                        const commentType = commentTypes[Math.floor(Math.random() * commentTypes.length)];
+                        
+                        const reviewStates = [null, 'APPROVED', 'CHANGES_REQUESTED', 'COMMENTED'];
+                        const reviewState = commentType === 'Review' ? reviewStates[Math.floor(Math.random() * reviewStates.length)] : null;
+
+                        const commentBodies = [
+                            'この実装は良いですが、エラーハンドリングを追加してください。',
+                            'コードレビュー: 変数名をより明確にすることを推奨します。',
+                            'セキュリティ上の懸念: XSS対策が必要です。',
+                            'テストケースを追加してください。',
+                            'パフォーマンスの改善が必要です。ループを最適化してください。',
+                            'デザインガイドラインに従ってください。',
+                            '良い実装です！承認します。',
+                            'ドキュメントを更新してください。',
+                            'この変更により既存の機能に影響がないか確認してください。',
+                            'コードの可読性を向上させるためにリファクタリングを検討してください。'
+                        ];
+
+                        const filePaths = [
+                            'src/components/Login.js',
+                            'src/utils/validation.js',
+                            'src/styles/main.css',
+                            'tests/unit/login.test.js',
+                            'src/api/auth.js'
+                        ];
+
+                        // Create comment date (same day as PR or slightly after)
+                        const commentDate = new Date(prDate);
+                        commentDate.setHours(Math.floor(Math.random() * 24));
+                        commentDate.setMinutes(Math.floor(Math.random() * 60));
+                        commentDate.setSeconds(Math.floor(Math.random() * 60));
+
+                        stubComments.push({
+                            prNumber: prNum,
+                            prTitle: prTitle,
+                            prAuthor: prAuthor,
+                            prState: Math.random() > 0.3 ? 'closed' : 'open',
+                            prCreatedAt: prCreatedAt,
+                            commentType: commentType,
+                            commentAuthor: authors[Math.floor(Math.random() * authors.length)],
+                            commentBody: commentBodies[Math.floor(Math.random() * commentBodies.length)],
+                            commentCreatedAt: commentDate.toISOString(),
+                            filePath: Math.random() > 0.3 ? filePaths[Math.floor(Math.random() * filePaths.length)] : '',
+                            lineNumber: Math.random() > 0.5 ? Math.floor(Math.random() * 100) + 1 : '',
+                            reviewState: reviewState,
+                            matchedKeywords: matchedKeywords
+                        });
+                    }
+                }
+
+                return stubComments;
+            }
+
+            loadStubData() {
+                console.log('=== loadStubData() called ===');
+                
+                // Generate stub data
+                this.allComments = this.generateStubData();
+                console.log('Generated stub comments:', this.allComments.length);
+                
+                // Log first comment for debugging
+                if (this.allComments.length > 0) {
+                    console.log('First comment sample:', {
+                        prCreatedAt: this.allComments[0].prCreatedAt,
+                        commentCreatedAt: this.allComments[0].commentCreatedAt,
+                        prCreatedAtType: typeof this.allComments[0].prCreatedAt,
+                        commentCreatedAtType: typeof this.allComments[0].commentCreatedAt
+                    });
+                }
+                
+                this.filteredComments = [...this.allComments];
+
+                // Hide auth section and show filter panel
+                this.authSection.style.display = 'none';
+                this.filterPanel.style.display = 'block';
+                this.resultsSection.style.display = 'block';
+
+                // Show success message
+                this.showAuthStatus('✓ スタブデータを読み込みました（テストモード）', 'success');
+
+                // Render comments
+                this.applyFilters();
+                this.renderComments();
+
+                console.log(`スタブデータ: ${this.allComments.length}件のコメントを生成しました`);
             }
         }
 
