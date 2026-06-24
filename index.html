@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitHub PR Review Comments Viewer</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>GitHub PR Review Comments Viewer</h1>
+            <p class="subtitle">View and export PR review comments with drill-down tree structure</p>
+        </header>
+
+        <!-- Authentication Section -->
+        <section id="auth-section" class="card">
+            <h2>Authentication</h2>
+            <div class="form-group">
+                <label for="github-token">GitHub Personal Access Token:</label>
+                <input type="password" id="github-token" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off">
+                <small>Required scopes: repo (for private repos) or public_repo (for public repos)</small>
+            </div>
+            <button id="auth-btn" class="btn btn-primary">Authenticate</button>
+            <div id="auth-status" class="status-message"></div>
+        </section>
+
+        <!-- Filter Panel -->
+        <section id="filter-panel" class="card" style="display:none;">
+            <h2>Filters</h2>
+            
+            <div class="form-group">
+                <label for="repo-input">Repository (owner/repo):</label>
+                <input type="text" id="repo-input" placeholder="facebook/react" required>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="start-date">Start Date:</label>
+                    <input type="date" id="start-date">
+                </div>
+                <div class="form-group">
+                    <label for="end-date">End Date:</label>
+                    <input type="date" id="end-date">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Keyword Filters:</label>
+                <div id="keyword-filters" class="checkbox-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" value="DEV" class="keyword-checkbox"> DEV
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" value="DESIGN" class="keyword-checkbox"> DESIGN
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" value="SEC" class="keyword-checkbox"> SEC
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" value="TEST" class="keyword-checkbox"> TEST
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" value="PERF" class="keyword-checkbox"> PERF
+                    </label>
+                </div>
+                <input type="text" id="custom-keyword" placeholder="Add custom keywords (comma-separated)">
+            </div>
+
+            <button id="fetch-btn" class="btn btn-primary">Fetch Comments</button>
+            <button id="logout-btn" class="btn btn-secondary">Logout</button>
+        </section>
+
+        <!-- Results Section -->
+        <section id="results-section" class="card" style="display:none;">
+            <div class="results-header">
+                <h2>Results</h2>
+                <div class="results-actions">
+                    <span id="comment-count" class="comment-count"></span>
+                    <button id="export-csv-btn" class="btn btn-success">📥 Download CSV</button>
+                </div>
+            </div>
+
+            <div id="loading" class="loading" style="display:none;">
+                <div class="spinner"></div>
+                <p>Fetching PR review comments...</p>
+                <p id="progress-text" class="progress-text"></p>
+            </div>
+
+            <div id="error-message" class="error-message" style="display:none;"></div>
+
+            <div id="comments-container" class="comments-container"></div>
+        </section>
+    </div>
+
+    <script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GitHub PRレビューコメントビューアー</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>GitHub PRレビューコメントビューアー</h1>
+            <p class="subtitle">PRレビューコメントをドリルダウン形式で表示・CSV出力</p>
+        </header>
+
+        <!-- Authentication Section -->
+        <section id="auth-section" class="card">
+            <h2>認証</h2>
+            <div class="form-group">
+                <label for="github-token">GitHub Personal Access Token:</label>
+                <input type="password" id="github-token" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" autocomplete="off">
+                <small>必要なスコープ: repo（プライベートリポジトリ）または public_repo（パブリックリポジトリ）</small>
+            </div>
+            <button id="auth-btn" class="btn btn-primary">認証</button>
+            <div id="auth-status" class="status-message"></div>
+        </section>
+
+        <!-- Filter Panel -->
+        <section id="filter-panel" class="card" style="display:none;">
+            <h2>フィルター</h2>
+            
+            <div class="form-group">
+                <label for="repo-input">リポジトリ (owner/repo または GitHub URL):</label>
+                <input type="text" id="repo-input" placeholder="facebook/react" required>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="start-date">開始日:</label>
+                    <input type="date" id="start-date">
+                </div>
+                <div class="form-group">
+                    <label for="end-date">終了日:</label>
+                    <input type="date" id="end-date">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>キーワードフィルター:</label>
+                <div id="keyword-filters" class="checkbox-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" value="DEV" class="keyword-checkbox"> DEV
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" value="DESIGN" class="keyword-checkbox"> DESIGN
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" value="SEC" class="keyword-checkbox"> SEC
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" value="TEST" class="keyword-checkbox"> TEST
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" value="PERF" class="keyword-checkbox"> PERF
+                    </label>
+                </div>
+                <input type="text" id="custom-keyword" placeholder="カスタムキーワードを追加（カンマ区切り）">
+            </div>
+
+            <button id="fetch-btn" class="btn btn-primary">コメント取得</button>
+            <button id="logout-btn" class="btn btn-secondary">ログアウト</button>
+        </section>
+
+        <!-- Results Section -->
+        <section id="results-section" class="card" style="display:none;">
+            <div class="results-header">
+                <h2>検索結果</h2>
+                <div class="results-actions">
+                    <span id="comment-count" class="comment-count"></span>
+                    <button id="export-csv-btn" class="btn btn-success">📥 CSVダウンロード</button>
+                </div>
+            </div>
+
+            <div id="loading" class="loading" style="display:none;">
+                <div class="spinner"></div>
+                <p>PRレビューコメントを取得中...</p>
+                <p id="progress-text" class="progress-text"></p>
+            </div>
+
+            <div id="error-message" class="error-message" style="display:none;"></div>
+
+            <div id="comments-container" class="comments-container"></div>
+        </section>
+    </div>
+
+    <script>
+        // ============================================================================
+        // GitHub API Service
+        // ============================================================================
+        class GitHubAPI {
+            constructor(token) {
+                this.token = token;
+                this.baseUrl = 'https://api.github.com';
+                this.headers = {
+                    'Authorization': `token ${token}`,
+                    'Accept': 'application/vnd.github.v3+json'
+                };
+            }
+
+            async validateToken() {
+                try {
+                    const response = await fetch(`${this.baseUrl}/user`, {
+                        headers: this.headers
+                    });
+
+                    if (!response.ok) {
+                        throw new Error('トークンが無効か、認証に失敗しました');
+                    }
+
+                    const data = await response.json();
+                    return {
+                        valid: true,
+                        user: data.login,
+                        rateLimit: {
+                            limit: response.headers.get('X-RateLimit-Limit'),
+                            remaining: response.headers.get('X-RateLimit-Remaining'),
+                            reset: response.headers.get('X-RateLimit-Reset')
+                        }
+                    };
+                } catch (error) {
+                    return {
+                        valid: false,
+                        error: error.message
+                    };
+                }
+            }
+
+            async fetchPullRequests(owner, repo, startDate, endDate) {
+                const allPRs = [];
+                let page = 1;
+                const perPage = 100;
+
+                try {
+                    console.log(`Fetching PRs for ${owner}/${repo}`);
+                    console.log(`Date filter: ${startDate} to ${endDate}`);
+                    
+                    while (true) {
+                        const url = `${this.baseUrl}/repos/${owner}/${repo}/pulls?state=all&page=${page}&per_page=${perPage}&sort=created&direction=desc`;
+                        console.log(`Fetching page ${page}...`);
+                        const response = await fetch(url, { headers: this.headers });
+
+                        if (!response.ok) {
+                            if (response.status === 404) {
+                                throw new Error('リポジトリが見つかりません。owner/repo形式を確認してください。');
+                            }
+                            throw new Error(`Pull Requestの取得に失敗しました: ${response.statusText}`);
+                        }
+
+                        const prs = await response.json();
+                        console.log(`Page ${page}: Got ${prs.length} PRs`);
+                        
+                        if (prs.length === 0) break;
+
+                        // Log first PR for debugging
+                        if (page === 1 && prs.length > 0) {
+                            console.log('First PR:', {
+                                number: prs[0].number,
+                                title: prs[0].title,
+                                created_at: prs[0].created_at,
+                                state: prs[0].state
+                            });
+                        }
+
+                        const filteredPRs = prs.filter(pr => {
+                            const prDate = new Date(pr.created_at);
+                            const start = startDate ? new Date(startDate) : new Date('2000-01-01');
+                            const end = endDate ? new Date(endDate) : new Date();
+                            end.setHours(23, 59, 59, 999);
+                            
+                            const inRange = prDate >= start && prDate <= end;
+                            
+                            if (!inRange && page === 1) {
+                                console.log(`PR #${pr.number} created ${pr.created_at} is outside range`);
+                            }
+                            
+                            return inRange;
+                        });
+
+                        console.log(`Page ${page}: ${filteredPRs.length} PRs match date filter`);
+                        allPRs.push(...filteredPRs);
+
+                        // Stop if we've gone past the start date
+                        if (prs.length < perPage || (startDate && new Date(prs[prs.length - 1].created_at) < new Date(startDate))) {
+                            break;
+                        }
+
+                        page++;
+                        
+                        // Safety limit
+                        if (page > 10) {
+                            console.log('Reached page limit');
+                            break;
+                        }
+                    }
+
+                    console.log(`Total PRs found: ${allPRs.length}`);
+                    return allPRs;
+                } catch (error) {
+                    console.error('Error in fetchPullRequests:', error);
+                    throw error;
+                }
+            }
+
+            async fetchReviews(owner, repo, prNumber) {
+                try {
+                    const url = `${this.baseUrl}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`;
+                    const response = await fetch(url, { headers: this.headers });
+
+                    if (!response.ok) {
+                        throw new Error(`PR #${prNumber}のレビュー取得に失敗しました`);
+                    }
+
+                    return await response.json();
+                } catch (error) {
+                    console.error(`Error fetching reviews for PR #${prNumber}:`, error);
+                    return [];
+                }
+            }
+
+            async fetchReviewComments(owner, repo, prNumber) {
+                try {
+                    const url = `${this.baseUrl}/repos/${owner}/${repo}/pulls/${prNumber}/comments`;
+                    const response = await fetch(url, { headers: this.headers });
+
+                    if (!response.ok) {
+                        throw new Error(`PR #${prNumber}のコメント取得に失敗しました`);
+                    }
+
+                    return await response.json();
+                } catch (error) {
+                    console.error(`Error fetching comments for PR #${prNumber}:`, error);
+                    return [];
+                }
+            }
+
+            async fetchIssueComments(owner, repo, prNumber) {
+                try {
+                    const url = `${this.baseUrl}/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+                    const response = await fetch(url, { headers: this.headers });
+
+                    if (!response.ok) {
+                        throw new Error(`PR #${prNumber}のイシューコメント取得に失敗しました`);
+                    }
+
+                    return await response.json();
+                } catch (error) {
+                    console.error(`Error fetching issue comments for PR #${prNumber}:`, error);
+                    return [];
+                }
+            }
+
+            async fetchAllCommentsForPR(owner, repo, prNumber) {
+                try {
+                    const [reviews, reviewComments, issueComments] = await Promise.all([
+                        this.fetchReviews(owner, repo, prNumber),
+                        this.fetchReviewComments(owner, repo, prNumber),
+                        this.fetchIssueComments(owner, repo, prNumber)
+                    ]);
+
+                    return {
+                        reviews,
+                        reviewComments,
+                        issueComments
+                    };
+                } catch (error) {
+                    console.error(`Error fetching all comments for PR #${prNumber}:`, error);
+                    return {
+                        reviews: [],
+                        reviewComments: [],
+                        issueComments: []
+                    };
+                }
+            }
+        }
+
+        // ============================================================================
+        // CSV Exporter
+        // ============================================================================
+        class CSVExporter {
+            static escapeCSVField(field) {
+                if (field === null || field === undefined) {
+                    return '';
+                }
+
+                const stringField = String(field);
+                
+                if (stringField.includes(',') || stringField.includes('"') || stringField.includes('\n')) {
+                    return `"${stringField.replace(/"/g, '""')}"`;
+                }
+                
+                return stringField;
+            }
+
+            static generateCSV(comments) {
+                const headers = [
+                    'PR Number',
+                    'PR Title',
+                    'PR Author',
+                    'PR State',
+                    'PR Created Date',
+                    'Comment Type',
+                    'Comment Author',
+                    'Comment Body',
+                    'Comment Created Date',
+                    'File Path',
+                    'Line Number',
+                    'Review State',
+                    'Keywords Found'
+                ];
+
+                const rows = [headers];
+
+                comments.forEach(comment => {
+                    const row = [
+                        comment.prNumber,
+                        this.escapeCSVField(comment.prTitle),
+                        comment.prAuthor,
+                        comment.prState,
+                        comment.prCreatedAt,
+                        comment.commentType,
+                        comment.commentAuthor,
+                        this.escapeCSVField(comment.commentBody),
+                        comment.commentCreatedAt,
+                        this.escapeCSVField(comment.filePath || ''),
+                        comment.lineNumber || '',
+                        comment.reviewState || '',
+                        comment.matchedKeywords.join('; ')
+                    ];
+                    rows.push(row);
+                });
+
+                return rows.map(row => row.join(',')).join('\n');
+            }
+
+            static downloadCSV(csvContent, filename) {
+                const BOM = '\uFEFF';
+                const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
+                
+                const link = document.createElement('a');
+                const url = URL.createObjectURL(blob);
+                
+                link.setAttribute('href', url);
+                link.setAttribute('download', filename);
+                link.style.visibility = 'hidden';
+                
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                URL.revokeObjectURL(url);
+            }
+
+            static exportComments(comments) {
+                if (!comments || comments.length === 0) {
+                    alert('No comments to export');
+                    return;
+                }
+
+                const csvContent = this.generateCSV(comments);
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+                const filename = `pr-comments-${timestamp}.csv`;
+                
+                this.downloadCSV(csvContent, filename);
+            }
+
+            static formatCommentForExport(pr, comment, commentType, reviewState = null) {
+                return {
+                    prNumber: pr.number,
+                    prTitle: pr.title,
+                    prAuthor: pr.user.login,
+                    prState: pr.state,
+                    prCreatedAt: new Date(pr.created_at).toISOString(),
+                    commentType: commentType,
+                    commentAuthor: comment.user.login,
+                    commentBody: comment.body || '',
+                    commentCreatedAt: new Date(comment.created_at).toISOString(),
+                    filePath: comment.path || '',
+                    lineNumber: comment.line || comment.original_line || '',
+                    reviewState: reviewState,
+                    matchedKeywords: comment.matchedKeywords || []
+                };
+            }
+        }
+
+        // ============================================================================
+        // Utilities
+        // ============================================================================
+        class Utils {
+            static formatDate(dateString) {
+                const date = new Date(dateString);
+                const options = {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                };
+                return date.toLocaleDateString('en-US', options);
+            }
+
+            static findKeywords(text, keywords) {
+                if (!text || !keywords || keywords.length === 0) {
+                    return [];
+                }
+
+                const foundKeywords = [];
+                const lowerText = text.toLowerCase();
+
+                keywords.forEach(keyword => {
+                    const lowerKeyword = keyword.toLowerCase().trim();
+                    if (lowerKeyword && lowerText.includes(lowerKeyword)) {
+                        foundKeywords.push(keyword.toUpperCase());
+                    }
+                });
+
+                return [...new Set(foundKeywords)];
+            }
+
+            static parseRepository(repoString) {
+                let cleanString = repoString.trim();
+                
+                // Remove GitHub URL if present
+                cleanString = cleanString.replace(/^https?:\/\/(www\.)?github\.com\//, '');
+                
+                // Remove .git suffix if present
+                cleanString = cleanString.replace(/\.git$/, '');
+                
+                // Split by /
+                const parts = cleanString.split('/').filter(p => p.length > 0);
+                
+                // Should have at least owner and repo
+                if (parts.length < 2) {
+                    throw new Error('リポジトリ形式が無効です。owner/repo形式またはGitHub URLを使用してください');
+                }
+                
+                // Take the first two parts (owner and repo)
+                return {
+                    owner: parts[0],
+                    repo: parts[1]
+                };
+            }
+
+            static getDefaultDateRange() {
+                const endDate = new Date();
+                const startDate = new Date();
+                startDate.setDate(startDate.getDate() - 30);
+
+                return {
+                    start: startDate.toISOString().split('T')[0],
+                    end: endDate.toISOString().split('T')[0]
+                };
+            }
+
+            static sanitizeHTML(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+
+            static sortCommentsByDate(comments, ascending = false) {
+                return comments.sort((a, b) => {
+                    const dateA = new Date(a.created_at || a.commentCreatedAt);
+                    const dateB = new Date(b.created_at || b.commentCreatedAt);
+                    return ascending ? dateA - dateB : dateB - dateA;
+                });
+            }
+
+            static validateDateRange(startDate, endDate) {
+                if (!startDate || !endDate) {
+                    return { valid: true };
+                }
+
+                const start = new Date(startDate);
+                const end = new Date(endDate);
+
+                if (start > end) {
+                    return {
+                        valid: false,
+                        error: '開始日は終了日より前である必要があります'
+                    };
+                }
+
+                return { valid: true };
+            }
+
+            static debounce(func, wait) {
+                let timeout;
+                return function executedFunction(...args) {
+                    const later = () => {
+                        clearTimeout(timeout);
+                        func(...args);
+                    };
+                    clearTimeout(timeout);
+                    timeout = setTimeout(later, wait);
+                };
+            }
+        }
+
+        // ============================================================================
+        // Main Application
+        // ============================================================================
+        class App {
+            constructor() {
+                this.githubApi = null;
+                this.allComments = [];
+                this.filteredComments = [];
+                this.currentKeywords = [];
+                
+                this.initializeElements();
+                this.attachEventListeners();
+                this.initializeDateRange();
+            }
+
+            initializeElements() {
+                this.authSection = document.getElementById('auth-section');
+                this.githubTokenInput = document.getElementById('github-token');
+                this.authBtn = document.getElementById('auth-btn');
+                this.authStatus = document.getElementById('auth-status');
+
+                this.filterPanel = document.getElementById('filter-panel');
+                this.repoInput = document.getElementById('repo-input');
+                this.startDateInput = document.getElementById('start-date');
+                this.endDateInput = document.getElementById('end-date');
+                this.keywordCheckboxes = document.querySelectorAll('.keyword-checkbox');
+                this.customKeywordInput = document.getElementById('custom-keyword');
+                this.fetchBtn = document.getElementById('fetch-btn');
+                this.logoutBtn = document.getElementById('logout-btn');
+
+                this.resultsSection = document.getElementById('results-section');
+                this.exportCsvBtn = document.getElementById('export-csv-btn');
+                this.loading = document.getElementById('loading');
+                this.errorMessage = document.getElementById('error-message');
+                this.commentsContainer = document.getElementById('comments-container');
+                this.commentCount = document.getElementById('comment-count');
+                this.progressText = document.getElementById('progress-text');
+            }
+
+            attachEventListeners() {
+                this.authBtn.addEventListener('click', () => this.handleAuthentication());
+                this.githubTokenInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') this.handleAuthentication();
+                });
+
+                this.fetchBtn.addEventListener('click', () => this.handleFetchComments());
+                this.logoutBtn.addEventListener('click', () => this.handleLogout());
+                this.exportCsvBtn.addEventListener('click', () => this.handleExportCSV());
+
+                this.keywordCheckboxes.forEach(checkbox => {
+                    checkbox.addEventListener('change', () => this.updateKeywordFilter());
+                });
+                this.customKeywordInput.addEventListener('input', 
+                    Utils.debounce(() => this.updateKeywordFilter(), 500)
+                );
+            }
+
+            initializeDateRange() {
+                const dateRange = Utils.getDefaultDateRange();
+                this.startDateInput.value = dateRange.start;
+                this.endDateInput.value = dateRange.end;
+            }
+
+            async handleAuthentication() {
+                const token = this.githubTokenInput.value.trim();
+
+                if (!token) {
+                    this.showAuthStatus('Please enter a GitHub Personal Access Token', 'error');
+                    return;
+                }
+
+                this.authBtn.disabled = true;
+                this.authBtn.textContent = 'Authenticating...';
+
+                try {
+                    this.githubApi = new GitHubAPI(token);
+                    const result = await this.githubApi.validateToken();
+
+                    if (result.valid) {
+                        sessionStorage.setItem('github_token', token);
+                        
+                        this.showAuthStatus(`✓ Authenticated as ${result.user}`, 'success');
+                        this.authSection.style.display = 'none';
+                        this.filterPanel.style.display = 'block';
+                    } else {
+                        this.showAuthStatus(`✗ Authentication failed: ${result.error}`, 'error');
+                        this.authBtn.disabled = false;
+                        this.authBtn.textContent = 'Authenticate';
+                    }
+                } catch (error) {
+                    this.showAuthStatus(`✗ Error: ${error.message}`, 'error');
+                    this.authBtn.disabled = false;
+                    this.authBtn.textContent = 'Authenticate';
+                }
+            }
+
+            showAuthStatus(message, type) {
+                this.authStatus.textContent = message;
+                this.authStatus.className = `status-message ${type}`;
+                this.authStatus.style.display = 'block';
+            }
+
+            handleLogout() {
+                sessionStorage.removeItem('github_token');
+                this.githubApi = null;
+                this.allComments = [];
+                this.filteredComments = [];
+                
+                this.githubTokenInput.value = '';
+                this.authStatus.style.display = 'none';
+                this.filterPanel.style.display = 'none';
+                this.resultsSection.style.display = 'none';
+                this.authSection.style.display = 'block';
+                this.authBtn.disabled = false;
+                this.authBtn.textContent = 'Authenticate';
+            }
+
+            async handleFetchComments() {
+                const repoString = this.repoInput.value.trim();
+                const startDate = this.startDateInput.value;
+                const endDate = this.endDateInput.value;
+
+                if (!repoString) {
+                    this.showError('Please enter a repository (owner/repo format)');
+                    return;
+                }
+
+                const dateValidation = Utils.validateDateRange(startDate, endDate);
+                if (!dateValidation.valid) {
+                    this.showError(dateValidation.error);
+                    return;
+                }
+
+                try {
+                    const { owner, repo } = Utils.parseRepository(repoString);
+                    
+                    this.showLoading(true);
+                    this.hideError();
+                    this.resultsSection.style.display = 'block';
+                    this.commentsContainer.innerHTML = '';
+
+                    this.updateProgress('Fetching pull requests...');
+                    const pullRequests = await this.githubApi.fetchPullRequests(owner, repo, startDate, endDate);
+                    
+                    console.log(`Fetched ${pullRequests.length} PRs`);
+                    console.log('Date range:', startDate, 'to', endDate);
+                    if (pullRequests.length > 0) {
+                        console.log('First PR created:', pullRequests[0].created_at);
+                        console.log('First PR updated:', pullRequests[0].updated_at);
+                    }
+                    
+                    if (pullRequests.length === 0) {
+                        this.showLoading(false);
+                        this.showError(`No pull requests found in the specified date range (${startDate} to ${endDate}). Try expanding the date range or check if the repository has any PRs.`);
+                        return;
+                    }
+
+                    this.updateProgress(`Found ${pullRequests.length} pull requests. Fetching comments...`);
+
+                    this.allComments = [];
+                    for (let i = 0; i < pullRequests.length; i++) {
+                        const pr = pullRequests[i];
+                        this.updateProgress(`Processing PR #${pr.number} (${i + 1}/${pullRequests.length})...`);
+
+                        const { reviews, reviewComments, issueComments } = 
+                            await this.githubApi.fetchAllCommentsForPR(owner, repo, pr.number);
+
+                        reviews.forEach(review => {
+                            if (review.body) {
+                                const comment = CSVExporter.formatCommentForExport(
+                                    pr, review, 'Review', review.state
+                                );
+                                comment.matchedKeywords = Utils.findKeywords(review.body, this.currentKeywords);
+                                this.allComments.push(comment);
+                            }
+                        });
+
+                        reviewComments.forEach(comment => {
+                            const formattedComment = CSVExporter.formatCommentForExport(
+                                pr, comment, 'Review Comment'
+                            );
+                            formattedComment.matchedKeywords = Utils.findKeywords(comment.body, this.currentKeywords);
+                            this.allComments.push(formattedComment);
+                        });
+
+                        issueComments.forEach(comment => {
+                            const formattedComment = CSVExporter.formatCommentForExport(
+                                pr, comment, 'Issue Comment'
+                            );
+                            formattedComment.matchedKeywords = Utils.findKeywords(comment.body, this.currentKeywords);
+                            this.allComments.push(formattedComment);
+                        });
+                    }
+
+                    this.showLoading(false);
+                    
+                    console.log(`Total comments fetched: ${this.allComments.length}`);
+                    
+                    if (this.allComments.length === 0) {
+                        this.showError('No comments found in the selected pull requests. The PRs may not have any review comments yet.');
+                        return;
+                    }
+                    
+                    this.applyFilters();
+                    this.renderComments();
+
+                } catch (error) {
+                    this.showLoading(false);
+                    this.showError(`Error: ${error.message}`);
+                    console.error('Fetch error:', error);
+                }
+            }
+
+            updateKeywordFilter() {
+                const keywords = [];
+
+                this.keywordCheckboxes.forEach(checkbox => {
+                    if (checkbox.checked) {
+                        keywords.push(checkbox.value);
+                    }
+                });
+
+                const customKeywords = this.customKeywordInput.value
+                    .split(',')
+                    .map(k => k.trim())
+                    .filter(k => k.length > 0);
+
+                this.currentKeywords = [...keywords, ...customKeywords];
+
+                this.allComments.forEach(comment => {
+                    comment.matchedKeywords = Utils.findKeywords(comment.commentBody, this.currentKeywords);
+                });
+
+                this.applyFilters();
+                this.renderComments();
+            }
+
+            applyFilters() {
+                if (this.currentKeywords.length === 0) {
+                    this.filteredComments = [...this.allComments];
+                } else {
+                    this.filteredComments = this.allComments.filter(
+                        comment => comment.matchedKeywords.length > 0
+                    );
+                }
+            }
+
+            renderComments() {
+                this.commentsContainer.innerHTML = '';
+
+                if (this.filteredComments.length === 0) {
+                    this.commentsContainer.innerHTML = `
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📭</div>
+                            <div class="empty-state-text">No comments found matching your criteria</div>
+                        </div>
+                    `;
+                    this.commentCount.textContent = '0 comments';
+                    return;
+                }
+
+                const commentsByPR = {};
+                this.filteredComments.forEach(comment => {
+                    if (!commentsByPR[comment.prNumber]) {
+                        commentsByPR[comment.prNumber] = {
+                            pr: {
+                                number: comment.prNumber,
+                                title: comment.prTitle,
+                                author: comment.prAuthor,
+                                state: comment.prState,
+                                createdAt: comment.prCreatedAt
+                            },
+                            comments: []
+                        };
+                    }
+                    commentsByPR[comment.prNumber].comments.push(comment);
+                });
+
+                Object.values(commentsByPR).forEach(prData => {
+                    const prElement = this.createPRElement(prData.pr, prData.comments);
+                    this.commentsContainer.appendChild(prElement);
+                });
+
+                this.commentCount.textContent = `${this.filteredComments.length} comment${this.filteredComments.length !== 1 ? 's' : ''}`;
+            }
+
+            createPRElement(pr, comments) {
+                const prDiv = document.createElement('div');
+                prDiv.className = 'pr-item';
+
+                const prHeader = document.createElement('div');
+                prHeader.className = 'pr-header';
+                prHeader.innerHTML = `
+                    <div>
+                        <div class="pr-title">
+                            <span class="pr-number">#${pr.number}</span>
+                            ${Utils.sanitizeHTML(pr.title)}
+                        </div>
+                        <div class="pr-meta">
+                            by ${Utils.sanitizeHTML(pr.author)} • 
+                            ${pr.state} • 
+                            ${Utils.formatDate(pr.createdAt)} • 
+                            ${comments.length} comment${comments.length !== 1 ? 's' : ''}
+                        </div>
+                    </div>
+                    <span class="toggle-icon">▶</span>
+                `;
+
+                const prContent = document.createElement('div');
+                prContent.className = 'pr-content';
+
+                const sortedComments = Utils.sortCommentsByDate([...comments]);
+
+                sortedComments.forEach(comment => {
+                    const commentElement = this.createCommentElement(comment);
+                    prContent.appendChild(commentElement);
+                });
+
+                prHeader.addEventListener('click', () => {
+                    prDiv.classList.toggle('expanded');
+                });
+
+                prDiv.appendChild(prHeader);
+                prDiv.appendChild(prContent);
+
+                return prDiv;
+            }
+
+            createCommentElement(comment) {
+                const commentDiv = document.createElement('div');
+                commentDiv.className = 'comment-item';
+
+                let reviewStateBadge = '';
+                if (comment.reviewState) {
+                    reviewStateBadge = `<span class="review-state ${comment.reviewState.toLowerCase().replace('_', '')}">${comment.reviewState.replace('_', ' ')}</span>`;
+                }
+
+                let keywordTags = '';
+                if (comment.matchedKeywords.length > 0) {
+                    keywordTags = `
+                        <div class="comment-keywords">
+                            ${comment.matchedKeywords.map(kw => 
+                                `<span class="keyword-tag">${Utils.sanitizeHTML(kw)}</span>`
+                            ).join('')}
+                        </div>
+                    `;
+                }
+
+                let filePath = '';
+                if (comment.filePath) {
+                    filePath = `<div class="comment-file">📄 ${Utils.sanitizeHTML(comment.filePath)}${comment.lineNumber ? `:${comment.lineNumber}` : ''}</div>`;
+                }
+
+                commentDiv.innerHTML = `
+                    <div class="comment-header">
+                        <span class="comment-author">${Utils.sanitizeHTML(comment.commentAuthor)}</span>
+                        <span class="comment-date">${Utils.formatDate(comment.commentCreatedAt)}</span>
+                    </div>
+                    <div style="margin-bottom: 8px;">
+                        <span style="font-size: 12px; color: #6c757d; font-weight: 600;">${comment.commentType}</span>
+                        ${reviewStateBadge}
+                    </div>
+                    <div class="comment-body">${Utils.sanitizeHTML(comment.commentBody)}</div>
+                    ${filePath}
+                    ${keywordTags}
+                `;
+
+                return commentDiv;
+            }
+
+            handleExportCSV() {
+                if (this.filteredComments.length === 0) {
+                    alert('No comments to export');
+                    return;
+                }
+
+                CSVExporter.exportComments(this.filteredComments);
+            }
+
+            showLoading(show) {
+                this.loading.style.display = show ? 'block' : 'none';
+                this.fetchBtn.disabled = show;
+            }
+
+            updateProgress(text) {
+                this.progressText.textContent = text;
+            }
+
+            showError(message) {
+                this.errorMessage.textContent = message;
+                this.errorMessage.style.display = 'block';
+            }
+
+            hideError() {
+                this.errorMessage.style.display = 'none';
+            }
+        }
+
+        // Initialize app when DOM is ready
+        document.addEventListener('DOMContentLoaded', () => {
+            new App();
+        });
+    </script>
+</body>
+</html>
